@@ -41,7 +41,7 @@ The run writes a report to `build/reports/cql-conformance.txt`:
 
 ```
 === cql-engine-harness conformance run ===
-total=1731  pass=1672  fail=49  error=10  (96.5% pass)
+total=1823  pass=1747  fail=61  error=15  (95.8% pass)
 --- per file (pass/total) ---
 ...
 --- failures & errors ---
