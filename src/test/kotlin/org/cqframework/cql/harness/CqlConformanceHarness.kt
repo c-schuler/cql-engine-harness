@@ -43,7 +43,18 @@ class CqlConformanceHarness {
         val expression: String,
         val outputs: List<String>,
         val invalid: kotlin.Boolean,
+        val version: String?,
+        val versionTo: String?,
     )
+
+    /**
+     * CQL specification version the engine claims to implement (see `specification.version` in the
+     * engine's `gradle.properties`). Tests introduced after this (`version` > this) or retired
+     * before it (`versionTo` < this) are skipped as out-of-scope. Override with the `CQL_SPEC_VERSION`
+     * env var or `-DcqlSpecVersion=...`.
+     */
+    private val engineSpecVersion: String =
+        System.getenv("CQL_SPEC_VERSION") ?: System.getProperty("cqlSpecVersion") ?: "1.5.3"
 
     @Test
     fun runConformanceSuite() {
@@ -56,11 +67,16 @@ class CqlConformanceHarness {
         var pass = 0
         var fail = 0
         var errored = 0
+        var skipped = 0
         val failures = StringBuilder()
         val perFile = StringBuilder()
 
         for (xml in xmlFiles) {
-            val cases = parse(xml)
+            val parsed = parse(xml)
+            if (parsed.isEmpty()) continue
+            // Gate by CQL spec version: only run tests applicable to the engine's version.
+            val (cases, skippedCases) = parsed.partition { appliesToEngine(it.version, it.versionTo) }
+            skipped += skippedCases.size
             if (cases.isEmpty()) continue
 
             // Fresh manager/engine per file to bound memory and isolate compile state.
@@ -106,7 +122,8 @@ class CqlConformanceHarness {
         val summary = buildString {
             append("=== cql-engine-harness conformance run ===\n")
             append("dir: ${dir.absolutePath}\n")
-            append("total=$total  pass=$pass  fail=$fail  error=$errored")
+            append("engine spec version: $engineSpecVersion  (tests gated by version/versionTo)\n")
+            append("total=$total  pass=$pass  fail=$fail  error=$errored  skipped(out-of-version)=$skipped")
             if (total > 0) append("  (${(pass * 1000 / total) / 10.0}% pass)")
             append("\n\n--- per file (pass/total) ---\n")
             append(perFile)
@@ -118,7 +135,8 @@ class CqlConformanceHarness {
         out.parentFile.mkdirs()
         out.writeText(summary)
         println(
-            "cql-engine-harness: total=$total pass=$pass fail=$fail error=$errored -> ${out.absolutePath}"
+            "cql-engine-harness [$engineSpecVersion]: total=$total pass=$pass fail=$fail " +
+                "error=$errored skipped=$skipped -> ${out.absolutePath}"
         )
     }
 
@@ -201,8 +219,24 @@ class CqlConformanceHarness {
             val groupName = (test.parentNode as? Element)?.getAttribute("name").orEmpty()
             val invalid =
                 isInvalid(test.getAttribute("invalid")) || isInvalid(exprEl.getAttribute("invalid"))
+            // version/versionTo may sit on the <test> or be inherited from the enclosing <group>.
+            val group = test.parentNode as? Element
+            val version =
+                test.getAttribute("version").ifEmpty { group?.getAttribute("version").orEmpty() }.ifEmpty { null }
+            val versionTo =
+                test.getAttribute("versionTo").ifEmpty { group?.getAttribute("versionTo").orEmpty() }
+                    .ifEmpty { null }
             cases.add(
-                Case(xml.name, groupName, test.getAttribute("name"), expression, childTexts(test, "output"), invalid)
+                Case(
+                    xml.name,
+                    groupName,
+                    test.getAttribute("name"),
+                    expression,
+                    childTexts(test, "output"),
+                    invalid,
+                    version,
+                    versionTo,
+                )
             )
         }
         return cases
@@ -228,6 +262,26 @@ class CqlConformanceHarness {
     }
 
     private fun isInvalid(attr: String?): kotlin.Boolean = !attr.isNullOrEmpty() && attr != "false"
+
+    /**
+     * A test applies to the engine if it was introduced at or before the engine's spec version
+     * (`version <= engine`) and not retired before it (`versionTo` absent or `engine <= versionTo`).
+     */
+    private fun appliesToEngine(version: String?, versionTo: String?): kotlin.Boolean {
+        if (version != null && compareVersions(version, engineSpecVersion) > 0) return false
+        if (versionTo != null && compareVersions(engineSpecVersion, versionTo) > 0) return false
+        return true
+    }
+
+    private fun compareVersions(a: String, b: String): Int {
+        val pa = a.split(".").map { it.toIntOrNull() ?: 0 }
+        val pb = b.split(".").map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(pa.size, pb.size)) {
+            val d = pa.getOrElse(i) { 0 } - pb.getOrElse(i) { 0 }
+            if (d != 0) return d
+        }
+        return 0
+    }
 
     private fun oneLine(s: String): String = s.replace(Regex("\\s+"), " ").trim().take(160)
 
