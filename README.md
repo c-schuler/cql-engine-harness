@@ -18,6 +18,12 @@ engine, and compares the two result `Value`s using the engine's own equivalence 
 marked `invalid` are expected to fail compilation or evaluation. It's a report generator — it never
 asserts on the failure count, so it won't fail the build.
 
+Tests are **gated by CQL spec version**: each test's `version`/`versionTo` (inherited from its
+enclosing `<group>`) is compared against the engine's declared spec version, and tests introduced
+after it or retired before it are skipped as out-of-scope rather than reported as failures. The
+engine declares `specification.version=1.5.3` in its `gradle.properties`; override with
+`CQL_SPEC_VERSION` / `-DcqlSpecVersion` when the engine targets a newer version.
+
 The engine is consumed as **live source** through `includeBuild("../clinical_quality_language/Src/java")`
 in `settings.gradle.kts`. Composite-build dependency substitution is version-agnostic (it matches by
 `group:module`), so the `org.cqframework:*` dependencies resolve to that checkout — edits to the
@@ -41,7 +47,8 @@ The run writes a report to `build/reports/cql-conformance.txt`:
 
 ```
 === cql-engine-harness conformance run ===
-total=1823  pass=1747  fail=61  error=15  (95.8% pass)
+engine spec version: 1.5.3  (tests gated by version/versionTo)
+total=1812  pass=1747  fail=61  error=4  skipped(out-of-version)=11  (96.4% pass)
 --- per file (pass/total) ---
 ...
 --- failures & errors ---
@@ -52,8 +59,17 @@ FAIL  [CqlDateTimeOperatorsTest.xml] Add/DateTimeAddYearInWeeks: ...
 
 - **Test suite location** resolves in order: `CQL_TESTS_DIR` env var → `-DcqlTestsDir=...` system
   property → the vendored submodule `cql-tests/tests/cql`.
+- **Engine spec version** (for gating): `CQL_SPEC_VERSION` env var → `-DcqlSpecVersion=...` system
+  property → default `1.5.3`.
 - **Pinning the suite:** the `cql-tests` submodule is pinned to a specific commit for reproducible
   numbers. Bump it with `git -C cql-tests checkout <ref>` and commit the gitlink.
+
+> **Note:** the cql-tests suite tracks the CQL 2.0-ballot / CI build. Version gating removes tests
+> for features introduced after the engine's spec version (e.g. `Slice`), but the suite sometimes
+> updates *expected outputs* to unpublished CI behavior on tests still labeled with an older
+> `version` (e.g. `Ceiling`/`Floor` overflow → null). Those can't be filtered from the `version`
+> attribute alone, so a subset of failures reflect forward-spec behavior rather than bugs against the
+> published spec.
 
 ## Debugging a single failure
 
